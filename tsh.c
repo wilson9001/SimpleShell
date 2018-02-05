@@ -25,6 +25,8 @@
 #define BG 2    /* running in background */
 #define ST 3    /* stopped */
 
+//Added TRUE and FALSE enums for C.
+typedef enum {TRUE, FALSE} bool;
 /* 
  * Jobs states: FG (foreground), BG (background), ST (stopped)
  * Job state transitions and enabling actions:
@@ -164,11 +166,44 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
+    char *argv[MAXLINE];//= null;
+
+    bool backgroundProcess = parseline(cmdline, argv);
+
+    pid_t pid;
+
+    if(!builtin_cmd(argv))
+    {
+        //fork and exec
+        if((pid = Fork()) == 0)
+        {
+            if(execve(argv[0], argv, environ) < 0)
+            {
+                printf("%s Command not found.\n", argv[0]);
+                exit(0);
+            }
+        }
+    }
+//This is flawed because it doesn't reap background children.
+    if(!backgroundProcess) 
+    {
+        //run process in background
+        int status;
+        if (waitpid(pid, &status, 0) < 0)
+        {
+            unix_error("waitfg: waitpid error");
+        }
+        else
+        {
+            printf("%d %s", pid, cmdline);
+        }
+    }
+
     return;
 }
 
 /* 
- * parseline - Parse the command line and build the argv array.
+ * Parseline - Parse the command line and build the argv array.
  * 
  * Characters enclosed in single quotes are treated as a single
  * argument.  Return true if the user has requested a BG job, false if
@@ -230,7 +265,37 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv) 
 {
-    return 0;     /* not a builtin command */
+     if (!strncmp(*argv[0], "quit", MAXLINE))
+    {
+        //TODO: run quit
+
+        return 1;
+    }
+    else if (!strncmp(*argv[0], "jobs", MAXLINE))
+    {
+        //TODO: run jons
+
+        return 1;
+    }
+    else if (!strncmp(*argv[0], "bg", MAXLINE))
+    {
+        //TODO: Background process
+
+        do_bgfg(argv);
+
+        return 1;
+    }
+    else if (!strncmp(*argv[0], "fg", MAXLINE))
+    {
+        //TODO: Foreground process
+        do_bgfg(argv);
+
+        return 1;
+    }
+    else //must be a file...
+    {
+        return ;     /* not a builtin command */
+    }
 }
 
 /* 
@@ -262,6 +327,25 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
+    int olderrno = errno;
+    sigset_t mask_all, prev_all;
+    pid_t pid;
+
+    Sigfillset(&mask_all);
+    while((pid = waitpid(-1, NULL, 0)) > 0)
+    {
+        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+        deletejob(pid);
+        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+    }
+
+    if(errno != ECHILD)
+    {
+        Sio_error("waitpid error");
+
+        errno = olderrno;
+    }
+
     return;
 }
 
