@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <stdbool.h>
 
 /* Misc manifest constants */
 #define MAXLINE    1024   /* max line size */
@@ -25,8 +26,6 @@
 #define BG 2    /* running in background */
 #define ST 3    /* stopped */
 
-//Added TRUE and FALSE enums for C.
-typedef enum {TRUE, FALSE} bool;
 /* 
  * Jobs states: FG (foreground), BG (background), ST (stopped)
  * Job state transitions and enabling actions:
@@ -52,7 +51,6 @@ struct job_t {              /* The job struct */
 };
 struct job_t jobs[MAXJOBS]; /* The job list */
 /* End global variables */
-
 
 /* Function prototypes */
 
@@ -166,7 +164,7 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
-    char *argv[MAXLINE];//= null;
+    char *argv[MAXARGS];//= null;
 
     bool backgroundProcess = parseline(cmdline, argv);
 
@@ -174,28 +172,47 @@ void eval(char *cmdline)
 
     if(!builtin_cmd(argv))
     {
+        sigset_t mask, prevMask;
+        Sigfillset(&mask);
+
+        Sigprocmask(SIG_BLOCK, &mask, &prev_mask);
         //fork and exec
-        if((pid = Fork()) == 0)
+        if((pid = fork()) == 0)//need to block signals and add to job list
         {
+            Sigprocmask(SIG_SETMASK, &prevMask, NULL);
             if(execve(argv[0], argv, environ) < 0)
             {
                 printf("%s Command not found.\n", argv[0]);
-                exit(0);
+                exit(EXIT_FAILURE);
             }
         }
-    }
-//This is flawed because it doesn't reap background children.
-    if(!backgroundProcess) 
-    {
-        //run process in background
-        int status;
-        if (waitpid(pid, &status, 0) < 0)
+        if(pid < 0)
         {
-            unix_error("waitfg: waitpid error");
+            unix_error("fork error");
         }
         else
         {
-            printf("%d %s", pid, cmdline);
+        //This is flawed because it doesn't reap background children.
+        //set new gpid for Child to equal pid. This will prevent SIGINT from terminating tsh.
+
+            int newJobState = backgroundProcess ? BG : FG;
+
+            addjob(jobs, pid, newJobState, cmdline);
+
+            Sigprocmask(SIG_SETMASK, &prevMask, NULL);
+            if(!backgroundProcess) 
+            {
+                //run process in background
+                int status;
+                if (waitpid(pid, &status, 0) < 0)//need to change to waiting for child signal version.
+                {
+                    unix_error("waitfg: waitpid error");
+                }
+                else
+                {
+                    printf("%d %s", pid, cmdline);
+                }
+            }
         }
     }
 
@@ -267,34 +284,32 @@ int builtin_cmd(char **argv)
 {
      if (!strncmp(*argv[0], "quit", MAXLINE))
     {
-        //TODO: run quit
-
-        return 1;
+        exit(EXIT_SUCCESS);
     }
     else if (!strncmp(*argv[0], "jobs", MAXLINE))
     {
-        //TODO: run jons
-
-        return 1;
+        //TODO: run jobs
+        listjobs(jobs);
+        return true;
     }
     else if (!strncmp(*argv[0], "bg", MAXLINE))
     {
         //TODO: Background process
 
         do_bgfg(argv);
-
-        return 1;
+        
+        return true;
     }
     else if (!strncmp(*argv[0], "fg", MAXLINE))
     {
         //TODO: Foreground process
         do_bgfg(argv);
-
-        return 1;
+        
+        return true;
     }
     else //must be a file...
     {
-        return ;     /* not a builtin command */
+        return false;     /* not a builtin command */
     }
 }
 
@@ -303,6 +318,14 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
+    if(strncmp(*argv[0], "bg", MAXLINE))
+    {
+
+    }
+    else
+    {
+        
+    }
     return;
 }
 
@@ -311,6 +334,7 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+    
     return;
 }
 
@@ -325,23 +349,23 @@ void waitfg(pid_t pid)
  *     available zombie children, but doesn't wait for any other
  *     currently running children to terminate.  
  */
-void sigchld_handler(int sig) 
+void sigchld_handler(int sig)
 {
     int olderrno = errno;
     sigset_t mask_all, prev_all;
     pid_t pid;
 
     Sigfillset(&mask_all);
-    while((pid = waitpid(-1, NULL, 0)) > 0)
+    while((pid = waitpid(-1, NULL, 0)) > 0)//Possibly should have WUNTRACED instead of 0 for this option... Need to check for stopped child and continue without deleting job if the child was merely stopped.
     {
         Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-        deletejob(pid);
+        deletejob(pid);//change this to first get the job_t from the job set and then call this with that and then the pid.
         Sigprocmask(SIG_SETMASK, &prev_all, NULL);
     }
 
     if(errno != ECHILD)
     {
-        Sio_error("waitpid error");
+        unix_error("waitpid error");
 
         errno = olderrno;
     }
@@ -356,6 +380,27 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {
+    sigset_t mask_all, prev_all;
+    Sigfillset(&mask_all);
+
+    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+
+    pid_t fgPID = fgpid();
+    if(fgPID)
+    {
+        pid_t pGID = getpgid(fgPID);
+
+        kill(-pGID, SIGINT/*SIGKILL*/);
+
+        job_t *job = getjobpid(fgPID);
+
+        deletejob(jobs, fgPID);
+
+        job = NULL;
+    }
+
+    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+    
     return;
 }
 
@@ -366,6 +411,23 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
+    sigset_t mask_all, prev_all;
+    Sigfillset(&mask_all);
+
+    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    pid_t fgPID = fgpid();
+
+    if(fgPID)
+    {
+        pid_t pGID = getpgid(fgPID);
+
+        kill(-pGID, SIGSTOP);
+
+        job_t *job = getjobpid(fgPID);
+
+        *job.state = ST;
+    }
+    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
     return;
 }
 
@@ -569,7 +631,7 @@ handler_t *Signal(int signum, handler_t *handler)
 {
     struct sigaction action, old_action;
 
-    action.sa_handler = handler;  
+    action.sa_handler = handler;
     sigemptyset(&action.sa_mask); /* block sigs of type being handled */
     action.sa_flags = SA_RESTART; /* restart syscalls if possible */
 
@@ -587,6 +649,3 @@ void sigquit_handler(int sig)
     printf("Terminating after receipt of SIGQUIT signal\n");
     exit(1);
 }
-
-
-
