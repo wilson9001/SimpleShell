@@ -178,9 +178,11 @@ void eval(char *cmdline)
         Sigfillset(&mask);
 
         Sigprocmask(SIG_BLOCK, &mask, &prev_mask);
-        //fork and exec
+        
         if((pid = fork()) == 0)
         {
+            setpgid(0, 0);
+
             Sigprocmask(SIG_SETMASK, &prevMask, NULL);
             if(execve(argv[0], argv, environ) < 0)
             {
@@ -194,8 +196,6 @@ void eval(char *cmdline)
         }
         else
         {
-        //set new gpid for Child to equal pid. This will prevent SIGINT from terminating tsh.
-
             int newJobState = backgroundProcess ? BG : FG;
 
             addjob(jobs, pid, newJobState, cmdline);
@@ -316,8 +316,22 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
-    pid_t pid = (pid_t) strtoimax(*argv[1]), NULL, 10);
-    //^Need to change this to job ID and remove % which will be in front of the job number.
+    char[] jobIDRaw = *argv[1];
+    char[] jobIDFinal;
+
+    if(*jobIDRaw[0] == '%')
+    {
+        char *subStrBeginning = jobID[1];
+
+        strcpy(jobIDFinal, subStrBeginning);
+    }
+    else
+    {
+        app_error("Invalid parameter %s", jobIDRaw);
+    }
+
+    int jid = (int) strtoimax(*argv[1]), NULL, 10);
+    
     bool fgJob = false;
 
     sigset_t mask_all, prev_all;
@@ -325,32 +339,37 @@ void do_bgfg(char **argv)
 
     Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
     
-    job_t job = getjobpid(jobs, pid);
+    job_t job = getjobjid(jobs, jid);
 
     if(job)
     {
+        pid_t pid = *job.pid;
+
         pid_t pgID = getpgid(pid);
 
         kill(-pgID, SIGCONT);
-    }
 
-    if(strncmp(*argv[0], "bg", MAXLINE))
-    {
-        *job.state = BG;   
-        //get all PID's in group and update job statuses?
-    }
-    else
-    {
-        fgJob = true;
+        if(strncmp(*argv[0], "bg", MAXLINE))
+        {
+            *job.state = BG;   
+            //get all PID's in group and update job statuses?
+        }
+        else
+        {
+            fgJob = true;
 
-        *job.state = FG;
+            *job.state = FG;
 
-        pidToComplete = pid;
+            pidToComplete = pid;
+        }
     }
 
     Sigprocmask(SIG_SETMASK, &prev_all, NULL);
 
-    waitfg(pid);
+    if(fgjob)
+    {
+        waitfg(pid);
+    }
 
     return;
 }
@@ -397,7 +416,7 @@ void sigchld_handler(int sig)
         if(!WIFSTOPPED(childStatus))
         {
             isStopped = false;
-            deletejob(pid);//change this to first get the job_t from the job set and then call this with that and then the pid.
+            deletejob(jobs, pid);//change this to first get the job_t from the job set and then call this with that and then the pid.
         }
         else
         {
@@ -443,11 +462,11 @@ void sigint_handler(int sig)
 
         kill(-pGID, SIGINT/*SIGKILL*/);
 
-        /*job_t *job = getjobpid(fgPID);
+        job_t *job = getjobpid(fgPID);
 
         deletejob(jobs, fgPID);
 
-        job = NULL;*/ //<---- We may not need this because it should send a sigChild which will take take of this in that handler.
+        job = NULL;
     }
 
     Sigprocmask(SIG_SETMASK, &prev_all, NULL);
@@ -476,7 +495,8 @@ void sigtstp_handler(int sig)
 
         /*job_t *job = getjobpid(fgPID);
 
-        *job.state = ST;*/ //<----- We may not need this, since this will probably send a sigchild signal and this can be updated there.
+        *job.state = ST;*/ //May not need this if SIGCHILD catches it. Otherwise we'll need to VVVVV
+        //May need to add changing the PID to wait on depending on if the SIGCHILD handler catches the signal.
     }
     Sigprocmask(SIG_SETMASK, &prev_all, NULL);
     return;
