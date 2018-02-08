@@ -169,8 +169,10 @@ void eval(char *cmdline)
 {
     char *argv[MAXARGS];
 
-    bool backgroundProcess = parseline(cmdline, argv);
-
+	bool backgroundProcess = parseline(cmdline, argv);
+	
+	if(argv[0])
+	{
     pid_t pid;
 
     if(!builtin_cmd(argv))
@@ -188,6 +190,7 @@ void eval(char *cmdline)
             if(execve(argv[0], argv, environ) < 0)
             {
                 printf("%s Command not found.\n", argv[0]);
+				fflush(stdout);
                 return;
             }
         }
@@ -214,7 +217,7 @@ void eval(char *cmdline)
             }
         }
     }
-
+	}
     return;
 }
 
@@ -313,33 +316,36 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
-    char *jobIDRaw = argv[1];
-    char *jobIDFinal = NULL;
-
-    if(jobIDRaw[0] == '%')
+    char *IDRaw = argv[1];
+    bool isPID = true;
+	
+    if(IDRaw[0] == '\%' && IDRaw[1])
     {
-        char *subStrBeginning = &jobIDRaw[1];
+		isPID = false;
+		IDRaw++;
+	}
 
-        strcpy(jobIDFinal, subStrBeginning);
-    }
-    else
-    {
-        app_error("Invalid parameter");
-    }
-
-    int jid = (int) strtoimax(jobIDFinal, NULL, 10);
+    int id = (int) strtoimax(IDRaw, NULL, 10);
     
     bool fgJob = false;
 
     pid_t pid = 0;
-
+	struct job_t *job;
+	
     sigset_t mask_all, prev_all;
     sigfillset(&mask_all);
 
     sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
     
-    struct job_t *job = getjobjid(jobs, jid);
-
+	if(isPID)
+	{
+		job = getjobpid(jobs, id);
+	}
+	else
+	{
+		job = getjobjid(jobs, id);
+	}
+	
     if(job)
     {
         pid = job->pid;
@@ -362,7 +368,7 @@ void do_bgfg(char **argv)
             pidToComplete = pid;
         }
     }
-
+	
     sigprocmask(SIG_SETMASK, &prev_all, NULL);
 
     if(fgJob)
