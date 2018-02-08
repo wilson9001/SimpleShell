@@ -189,9 +189,9 @@ void eval(char *cmdline)
 				sigprocmask(SIG_SETMASK, &prevMask, NULL);
 				if(execve(argv[0], argv, environ) < 0)
 				{
-					printf("%s Command not found.\n", argv[0]);
+					printf("%s command not found.\n", argv[0]);
 					fflush(stdout);
-					return;
+					exit(EXIT_FAILURE);
 				}
 			}
 			if(pid < 0)
@@ -203,7 +203,7 @@ void eval(char *cmdline)
 				int newJobState = backgroundProcess ? BG : FG;
 
 				addjob(jobs, pid, newJobState, cmdline);
-				printf("Job added.\n");
+				//printf("Job added.\n");
 
 				if(!backgroundProcess)
 				{
@@ -216,6 +216,7 @@ void eval(char *cmdline)
 				{
 					waitfg(pid);
 				}
+				//sigprocmask(SIG_SETMASK, &prevMask, NULL);
 			}
 		}
 	}
@@ -375,6 +376,7 @@ void do_bgfg(char **argv)
     {
         waitfg(pid);
     }
+	//sigprocmask(SIG_SETMASK, &prev_all, NULL);
 
     return;
 }
@@ -387,12 +389,12 @@ void waitfg(pid_t pid)
     sigset_t mask;
     sigemptyset(&mask);
 
-	sigset_t mask_all, prev_all;
-    sigfillset(&mask_all);
+	//sigset_t mask_all, prev_all;
+    //sigfillset(&mask_all);
 
-    sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-	printf("before while\n");
-	sigprocmask(SIG_SETMASK, &prev_all, NULL);
+    //sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+	//printf("before while\n");
+	//sigprocmask(SIG_SETMASK, &prev_all, NULL);
 	
 	/*struct timespec tim;
    tim.tv_nsec = 50000;*/
@@ -404,9 +406,9 @@ void waitfg(pid_t pid)
 		//nanosleep(&tim);
     }
 
-	sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-	printf("after while\n");
-	sigprocmask(SIG_SETMASK, &prev_all, NULL);
+	//sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+	//printf("after while\n");
+	//sigprocmask(SIG_SETMASK, &prev_all, NULL);
 	
     return;
 }
@@ -433,14 +435,22 @@ void sigchld_handler(int sig)
     sigfillset(&mask_all);
     sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
 	
-	printf("In sigchild handler.\n");
-	fflush(stdout);
+	//printf("In sigchild handler.\n");
+	//fflush(stdout);
 	
     while((pid = waitpid(-1, childStatus, WNOHANG | WUNTRACED)) > 0)
     {
         if(!WIFSTOPPED(childStatus))
         {
             deletejob(jobs, pid);
+			
+			if(WIFSIGNALED(childStatus))
+			{
+				int sigNum = WTERMSIG(childStatus);
+				
+				printf("Child terminated abnormally by signal %d", sigNum);
+				fflush(stdout);
+			}
 		}
         else
         {
@@ -448,24 +458,25 @@ void sigchld_handler(int sig)
 
             job->state = ST;
         }
-
+	
+		
         if(pid == pidToComplete)
         {
             pidToComplete = 0;
-			printf("PID reset\n");
-			fflush(stdout);
+			//printf("PID reset\n");
+			//fflush(stdout);
         }
     }
 
-	printf("Reaping complete.\n");
-	fflush(stdout);
+	//printf("Reaping complete.\n");
+	//fflush(stdout);
 	
     sigprocmask(SIG_SETMASK, &prev_all, NULL);
     
-    if(errno != ECHILD)
+    /*if(errno != ECHILD)
     {
         unix_error("waitpid error");
-    }
+    }*/
 
     errno = olderrno;
     return;
