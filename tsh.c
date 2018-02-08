@@ -173,50 +173,51 @@ void eval(char *cmdline)
 	
 	if(argv[0])
 	{
-    pid_t pid;
+		pid_t pid;
 
-    if(!builtin_cmd(argv))
-    {
-        sigset_t mask, prevMask;
-        sigfillset(&mask);
+		if(!builtin_cmd(argv))
+		{
+			sigset_t mask, prevMask;
+			sigfillset(&mask);
 
-        sigprocmask(SIG_BLOCK, &mask, &prevMask);
-        
-        if((pid = fork()) == 0)
-        {
-            setpgid(0, 0);
+			sigprocmask(SIG_BLOCK, &mask, &prevMask);
+			
+			if((pid = fork()) == 0)
+			{
+				setpgid(0, 0);
 
-            sigprocmask(SIG_SETMASK, &prevMask, NULL);
-            if(execve(argv[0], argv, environ) < 0)
-            {
-                printf("%s Command not found.\n", argv[0]);
-				fflush(stdout);
-                return;
-            }
-        }
-        if(pid < 0)
-        {
-            unix_error("fork error");
-        }
-        else
-        {
-            int newJobState = backgroundProcess ? BG : FG;
+				sigprocmask(SIG_SETMASK, &prevMask, NULL);
+				if(execve(argv[0], argv, environ) < 0)
+				{
+					printf("%s Command not found.\n", argv[0]);
+					fflush(stdout);
+					return;
+				}
+			}
+			if(pid < 0)
+			{
+				unix_error("fork error");
+			}
+			else
+			{
+				int newJobState = backgroundProcess ? BG : FG;
 
-            addjob(jobs, pid, newJobState, cmdline);
+				addjob(jobs, pid, newJobState, cmdline);
+				printf("Job added.\n");
 
-            if(!backgroundProcess)
-            {
-                pidToComplete = pid;
-            }
+				if(!backgroundProcess)
+				{
+					pidToComplete = pid;
+				}
 
-            sigprocmask(SIG_SETMASK, &prevMask, NULL);
-            
-            if(!backgroundProcess)
-            {
-                waitfg(pid);
-            }
-        }
-    }
+				sigprocmask(SIG_SETMASK, &prevMask, NULL);
+				
+				if(!backgroundProcess)
+				{
+					waitfg(pid);
+				}
+			}
+		}
 	}
     return;
 }
@@ -357,8 +358,7 @@ void do_bgfg(char **argv)
         if(strncmp(argv[0], "bg", MAXLINE))
         {
             job->state = BG;
-            //get all PID's in group and update job statuses?
-        }
+		}
         else
         {
             fgJob = true;
@@ -387,11 +387,27 @@ void waitfg(pid_t pid)
     sigset_t mask;
     sigemptyset(&mask);
 
+	sigset_t mask_all, prev_all;
+    sigfillset(&mask_all);
+
+    sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+	printf("before while\n");
+	sigprocmask(SIG_SETMASK, &prev_all, NULL);
+	
+	/*struct timespec tim;
+   tim.tv_nsec = 50000;*/
+	
     while(pidToComplete);
     {
-        sigsuspend(&mask);
+        //sigsuspend(&mask);
+		sleep(1);
+		//nanosleep(&tim);
     }
 
+	sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+	printf("after while\n");
+	sigprocmask(SIG_SETMASK, &prev_all, NULL);
+	
     return;
 }
 
@@ -416,16 +432,18 @@ void sigchld_handler(int sig)
 
     sigfillset(&mask_all);
     sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-    while((pid = waitpid(-1, /*&*/childStatus, WNOHANG | WUNTRACED)) > 0)
+	
+	printf("In sigchild handler.\n");
+	fflush(stdout);
+	
+    while((pid = waitpid(-1, childStatus, WNOHANG | WUNTRACED)) > 0)
     {
         if(!WIFSTOPPED(childStatus))
         {
-            //isStopped = false;
-            deletejob(jobs, pid);//change this to first get the job_t from the job set and then call this with that and then the pid.
-        }
+            deletejob(jobs, pid);
+		}
         else
         {
-            //isStopped = true;
             struct job_t *job = getjobpid(jobs, pid);
 
             job->state = ST;
@@ -434,9 +452,14 @@ void sigchld_handler(int sig)
         if(pid == pidToComplete)
         {
             pidToComplete = 0;
+			printf("PID reset\n");
+			fflush(stdout);
         }
     }
 
+	printf("Reaping complete.\n");
+	fflush(stdout);
+	
     sigprocmask(SIG_SETMASK, &prev_all, NULL);
     
     if(errno != ECHILD)
