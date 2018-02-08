@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <inttypes.h>
 
 /* Misc manifest constants */
 #define MAXLINE    1024   /* max line size */
@@ -175,15 +176,15 @@ void eval(char *cmdline)
     if(!builtin_cmd(argv))
     {
         sigset_t mask, prevMask;
-        Sigfillset(&mask);
+        sigfillset(&mask);
 
-        Sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+        sigprocmask(SIG_BLOCK, &mask, &prevMask);
         
         if((pid = fork()) == 0)
         {
             setpgid(0, 0);
 
-            Sigprocmask(SIG_SETMASK, &prevMask, NULL);
+            sigprocmask(SIG_SETMASK, &prevMask, NULL);
             if(execve(argv[0], argv, environ) < 0)
             {
                 printf("%s Command not found.\n", argv[0]);
@@ -205,7 +206,7 @@ void eval(char *cmdline)
                 pidToComplete = pid;
             }
 
-            Sigprocmask(SIG_SETMASK, &prevMask, NULL);
+            sigprocmask(SIG_SETMASK, &prevMask, NULL);
             
             if(!backgroundProcess)
             {
@@ -280,32 +281,28 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv) 
 {
-     if (!strncmp(*argv[0], "quit", MAXLINE))
+     if (!strncmp(argv[0], "quit", MAXLINE))
     {
         exit(EXIT_SUCCESS);
     }
-    else if (!strncmp(*argv[0], "jobs", MAXLINE))
+    else if (!strncmp(argv[0], "jobs", MAXLINE))
     {
-        //TODO: run jobs
         listjobs(jobs);
         return true;
     }
-    else if (!strncmp(*argv[0], "bg", MAXLINE))
+    else if (!strncmp(argv[0], "bg", MAXLINE))
     {
-        //TODO: Background process
-
         do_bgfg(argv);
         
         return true;
     }
-    else if (!strncmp(*argv[0], "fg", MAXLINE))
+    else if (!strncmp(argv[0], "fg", MAXLINE))
     {
-        //TODO: Foreground process
-        do_bgfg(argv);
+    	do_bgfg(argv);
         
         return true;
     }
-    else //must be a file...
+    else
     {
         return false;     /* not a builtin command */
     }
@@ -316,57 +313,59 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
-    char[] jobIDRaw = *argv[1];
-    char[] jobIDFinal;
+    char *jobIDRaw = argv[1];
+    char *jobIDFinal = NULL;
 
-    if(*jobIDRaw[0] == '%')
+    if(jobIDRaw[0] == '%')
     {
-        char *subStrBeginning = jobID[1];
+        char *subStrBeginning = &jobIDRaw[1];
 
         strcpy(jobIDFinal, subStrBeginning);
     }
     else
     {
-        app_error("Invalid parameter %s", jobIDRaw);
+        app_error("Invalid parameter");
     }
 
-    int jid = (int) strtoimax(*argv[1]), NULL, 10);
+    int jid = (int) strtoimax(jobIDFinal, NULL, 10);
     
     bool fgJob = false;
 
-    sigset_t mask_all, prev_all;
-    Sigfillset(&mask_all);
+    pid_t pid = 0;
 
-    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    sigset_t mask_all, prev_all;
+    sigfillset(&mask_all);
+
+    sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
     
-    job_t job = getjobjid(jobs, jid);
+    struct job_t *job = getjobjid(jobs, jid);
 
     if(job)
     {
-        pid_t pid = *job.pid;
+        pid = job->pid;
 
         pid_t pgID = getpgid(pid);
 
         kill(-pgID, SIGCONT);
 
-        if(strncmp(*argv[0], "bg", MAXLINE))
+        if(strncmp(argv[0], "bg", MAXLINE))
         {
-            *job.state = BG;   
+            job->state = BG;
             //get all PID's in group and update job statuses?
         }
         else
         {
             fgJob = true;
 
-            *job.state = FG;
+            job->state = FG;
 
             pidToComplete = pid;
         }
     }
 
-    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+    sigprocmask(SIG_SETMASK, &prev_all, NULL);
 
-    if(fgjob)
+    if(fgJob)
     {
         waitfg(pid);
     }
@@ -380,7 +379,7 @@ void do_bgfg(char **argv)
 void waitfg(pid_t pid)
 {
     sigset_t mask;
-    Sigemptyset(&mask);
+    sigemptyset(&mask);
 
     while(pidToComplete);
     {
@@ -406,24 +405,24 @@ void sigchld_handler(int sig)
     int olderrno = errno;
     sigset_t mask_all, prev_all;
     pid_t pid;
-    int *childStatus;
-    bool isStopped;
+    int *childStatus = NULL;
+    //bool isStopped;
 
-    Sigfillset(&mask_all);
-    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-    while((pid = waitpid(-1, &childStatus, WNOHANG | WUNTRACED)) > 0)
+    sigfillset(&mask_all);
+    sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    while((pid = waitpid(-1, /*&*/childStatus, WNOHANG | WUNTRACED)) > 0)
     {
         if(!WIFSTOPPED(childStatus))
         {
-            isStopped = false;
+            //isStopped = false;
             deletejob(jobs, pid);//change this to first get the job_t from the job set and then call this with that and then the pid.
         }
         else
         {
-            isStopped = true;
-            job_t job = getjobpid(pid);
+            //isStopped = true;
+            struct job_t *job = getjobpid(jobs, pid);
 
-            job.state = ST;
+            job->state = ST;
         }
 
         if(pid == pidToComplete)
@@ -432,7 +431,7 @@ void sigchld_handler(int sig)
         }
     }
 
-    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+    sigprocmask(SIG_SETMASK, &prev_all, NULL);
     
     if(errno != ECHILD)
     {
@@ -451,9 +450,9 @@ void sigchld_handler(int sig)
 void sigint_handler(int sig) 
 {
     sigset_t mask_all, prev_all;
-    Sigfillset(&mask_all);
+    sigfillset(&mask_all);
 
-    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
 
     pid_t fgPID = fgpid(jobs);
     if(fgPID)
@@ -462,14 +461,14 @@ void sigint_handler(int sig)
 
         kill(-pGID, SIGINT/*SIGKILL*/);
 
-        job_t *job = getjobpid(fgPID);
+        //struct job_t *job = getjobpid(jobs, fgPID);
 
         deletejob(jobs, fgPID);
 
-        job = NULL;
+        //job = NULL;
     }
 
-    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+    sigprocmask(SIG_SETMASK, &prev_all, NULL);
     
     return;
 }
@@ -482,9 +481,9 @@ void sigint_handler(int sig)
 void sigtstp_handler(int sig) 
 {
     sigset_t mask_all, prev_all;
-    Sigfillset(&mask_all);
+    sigfillset(&mask_all);
 
-    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
     pid_t fgPID = fgpid(jobs);
 
     if(fgPID)
@@ -498,7 +497,7 @@ void sigtstp_handler(int sig)
         *job.state = ST;*/ //May not need this if SIGCHILD catches it. Otherwise we'll need to VVVVV
         //May need to add changing the PID to wait on depending on if the SIGCHILD handler catches the signal.
     }
-    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+    sigprocmask(SIG_SETMASK, &prev_all, NULL);
     return;
 }
 
