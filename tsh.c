@@ -169,7 +169,7 @@ void eval(char *cmdline)
 {
     char *argv[MAXARGS];
 
-	bool backgroundProcess = parseline(cmdline, argv);
+	int backgroundProcess = parseline(cmdline, argv);
 	
 	if(argv[0])
 	{
@@ -181,15 +181,16 @@ void eval(char *cmdline)
 			sigfillset(&mask);
 
 			sigprocmask(SIG_BLOCK, &mask, &prevMask);
-			
+			//printf("not built-in command.\n");
 			if((pid = fork()) == 0)
 			{
 				setpgid(0, 0);
-
+				//printf("successful fork\n");
+				//fflush(stdout);
 				sigprocmask(SIG_SETMASK, &prevMask, NULL);
 				if(execve(argv[0], argv, environ) < 0)
 				{
-					printf("%s command not found.\n", argv[0]);
+					printf("%s: Command not found.\n", argv[0]);
 					fflush(stdout);
 					exit(EXIT_FAILURE);
 				}
@@ -204,16 +205,28 @@ void eval(char *cmdline)
 
 				addjob(jobs, pid, newJobState, cmdline);
 				//printf("Job added.\n");
-
+				//fflush(stdout);
+				
 				if(!backgroundProcess)
 				{
+					//printf("foreground process\n");
+					//fflush(stdout);
+					
 					pidToComplete = pid;
+				}
+				else
+				{
+					printf("[%d] (%d) %s", /*nextjid -1*/maxjid(jobs), pid, cmdline);
+					fflush(stdout);
 				}
 
 				sigprocmask(SIG_SETMASK, &prevMask, NULL);
 				
 				if(!backgroundProcess)
 				{
+					//printf("About to call waitfg\n");
+					//fflush(stdout);
+					
 					waitfg(pid);
 				}
 				//sigprocmask(SIG_SETMASK, &prevMask, NULL);
@@ -359,6 +372,8 @@ void do_bgfg(char **argv)
         if(strncmp(argv[0], "bg", MAXLINE))
         {
             job->state = BG;
+			printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+			fflush(stdout);
 		}
         else
         {
@@ -369,6 +384,11 @@ void do_bgfg(char **argv)
             pidToComplete = pid;
         }
     }
+	else
+	{
+		printf("No %s %d.\n", isPID ? "PID" : "JID", id);
+		fflush(stdout);
+	}
 	
     sigprocmask(SIG_SETMASK, &prev_all, NULL);
 
@@ -401,8 +421,13 @@ void waitfg(pid_t pid)
 	
     while(pidToComplete);
     {
+		//sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+		//printf("About to call sigsuspend.\n");
+		//sigprocmask(SIG_SETMASK, &prev_all, NULL);
         //sigsuspend(&mask);
-		sleep(1);
+		//printf("After sigsuspend\n");
+		//fflush(stdout);
+		//sleep(1);
 		//nanosleep(&tim);
     }
 
@@ -429,7 +454,7 @@ void sigchld_handler(int sig)
     int olderrno = errno;
     sigset_t mask_all, prev_all;
     pid_t pid;
-    int *childStatus = NULL;
+    int childStatus;
     //bool isStopped;
 
     sigfillset(&mask_all);
@@ -438,27 +463,53 @@ void sigchld_handler(int sig)
 	//printf("In sigchild handler.\n");
 	//fflush(stdout);
 	
-    while((pid = waitpid(-1, childStatus, WNOHANG | WUNTRACED)) > 0)
+    while((pid = waitpid(-1, &childStatus, WNOHANG | WUNTRACED)) > 0)
     {
-        if(!WIFSTOPPED(childStatus))
+		struct job_t *job = getjobpid(jobs, pid);
+
+        if(WIFSTOPPED(childStatus))
         {
-            deletejob(jobs, pid);
+			//printf("Suspended child %d\n", pid);
+			//fflush(stdout);
+			
+            //struct job_t *job = getjobpid(jobs, pid);
+
+			printf("Job [%d] (%d) stopped by signal %d\n",job->jid, job->pid, SIGTSTP);
+			fflush(stdout);
+			
+            job->state = ST;
+		}
+        else
+        {
+			// printf("Deleted child %d", pid);
+			//fflush(stdout);
+			
+			//struct job_t *job = getjobpid(jobs, pid);
 			
 			if(WIFSIGNALED(childStatus))
 			{
 				int sigNum = WTERMSIG(childStatus);
 				
-				printf("Child terminated abnormally by signal %d", sigNum);
+				printf("Job [%d] (%d) terminated by signal %d\n",job->jid, job->pid, sigNum);
 				fflush(stdout);
 			}
-		}
-        else
-        {
-            struct job_t *job = getjobpid(jobs, pid);
-
-            job->state = ST;
+			/*else
+			{
+				if(WIFEXITED(childStatus))
+				{
+					printf("child %d terminated normally.\n", pid);
+				}
+				else
+				{
+					printf("child %d terminated abnormally.\n", pid);
+				}
+				fflush(stdout);
+			}*/
+			//printf("deleted child %d\n", pid);
+			//fflush(stdout);
+			
+			deletejob(jobs, pid);
         }
-	
 		
         if(pid == pidToComplete)
         {
@@ -494,19 +545,32 @@ void sigint_handler(int sig)
 
     sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
 
+	//printf("SIGINT caught.\n");
+	//fflush(stdout);
+	
     pid_t fgPID = fgpid(jobs);
     if(fgPID)
     {
+		/*struct job_t *job = getjobpid(jobs, fgPID);
+		
+		printf("Job [%d] (%d) terminated by signal %d\n",job->jid, job->pid, SIGINT);
+		fflush(stdout);*/
+		
         pid_t pGID = getpgid(fgPID);
 
         kill(-pGID, SIGINT/*SIGKILL*/);
 
         //struct job_t *job = getjobpid(jobs, fgPID);
 
-        deletejob(jobs, fgPID);
+        //deletejob(jobs, fgPID);
 
         //job = NULL;
     }
+	/*else
+	{
+		printf("no foreground job to terminate.\n");
+		fflush(stdout);
+	}*/
 
     sigprocmask(SIG_SETMASK, &prev_all, NULL);
     
@@ -525,18 +589,28 @@ void sigtstp_handler(int sig)
 
     sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
     pid_t fgPID = fgpid(jobs);
-
+	
     if(fgPID)
     {
+		/*struct job_t *job = getjobpid(jobs, fgPID);
+		printf("Job [%d] (%d) stopped by signal %d\n",job->jid, job->pid, SIGTSTP);
+		fflush(stdout);*/
+		
         pid_t pGID = getpgid(fgPID);
 
-        kill(-pGID, SIGSTOP);
+        kill(-pGID, SIGTSTP);
 
         /*job_t *job = getjobpid(fgPID);
 
         *job.state = ST;*/ //May not need this if SIGCHILD catches it. Otherwise we'll need to VVVVV
         //May need to add changing the PID to wait on depending on if the SIGCHILD handler catches the signal.
     }
+	/*else
+	{
+		printf("No foreground job to stop.\n");
+		fflush(stdout);
+	}*/
+	
     sigprocmask(SIG_SETMASK, &prev_all, NULL);
     return;
 }
